@@ -1,0 +1,24 @@
+{
+  "name": "crm-sheets-sync",
+  "version": "1.0.0",
+  "description": "Google Sheets to CRM Lead Sync",
+  "main": "server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "nodemon server.js",
+    "db:init": "node scripts/init-database.js",
+    "db:reset": "node scripts/init-database.js --reset",
+    "db:init-with-data": "node scripts/init-database.js --sample-data",
+    "db:check": "node scripts/init-database.js --check",
+    "db:stats": "node scripts/init-database.js --stats",
+    "db:help": "node scripts/init-database.js --help"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "cors": "^2.8.5",
+    "dotenv": "^16.3.1",
+    "mysql2": "^3.6.5",
+    "googleapis": "^126.0.1"
+  }
+}
