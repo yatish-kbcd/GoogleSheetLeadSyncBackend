@@ -38,10 +38,10 @@ export async function createSyncHistory(syncData) {
 
 export async function getRecentSyncHistory(limit = 10) {
   const sql = `
-    SELECT * FROM sync_history 
-    ORDER BY started_at DESC 
+    SELECT * FROM sync_history
+    ORDER BY created_at DESC
     LIMIT ?
   `;
-  
+
   return await query(sql, [limit]);
 }
