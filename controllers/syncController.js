@@ -2,11 +2,14 @@
 import { getAllLeadsFromSheet, getSheetInfo, mapToCRMFields } from '../services/googleSheetsService.js';
 import { createLead, findLeadByEmailAndTimestamp, findLeadByEmail, updateLead, getRecentSyncedLeads } from '../models/leads.js';
 import { createSyncHistory, getRecentSyncHistory } from '../models/syncHistory.js';
+import { getFieldMapping } from '../models/fieldMappings.js';
 import { query } from '../config/database.js';
+import axios from 'axios';
+import config from '../config/config.js';
 
-async function processLead(sheetLead, forceUpdate = false) {
-  const leadData = mapToCRMFields(sheetLead);
-  
+async function processLead(aid, sheetLead, fieldMapping) {
+  const leadData = mapToCRMFields(sheetLead, fieldMapping);
+
   if (!leadData.email) {
     return {
       rowNumber: sheetLead.rowNumber,
@@ -19,52 +22,76 @@ async function processLead(sheetLead, forceUpdate = false) {
     let result;
     let existingLead = null;
 
-    // Try to find existing lead by email and timestamp first
-    if (leadData.timestamp) {
-      existingLead = await findLeadByEmailAndTimestamp(leadData.email, leadData.timestamp);
-    }
-
-    // If not found by timestamp, try by email only
-    if (!existingLead) {
-      existingLead = await findLeadByEmail(leadData.email);
-    }
-
-    if (existingLead && !forceUpdate) {
+    // Check if this row has already been synced by checking email and row number
+    const leadExists = await checkLeadRowExists(aid, leadData.email, sheetLead.rowNumber);
+    if (leadExists) {
       return {
         rowNumber: sheetLead.rowNumber,
-        leadId: existingLead.id,
+        leadId: leadExists.id,
         status: 'skipped',
-        reason: 'Lead already exists'
+        reason: 'Row already processed'
       };
     }
 
-    if (existingLead && forceUpdate) {
-      // Update existing lead
-      await updateLead(existingLead.id, {
-        ...leadData,
-        sheetRowNumber: sheetLead.rowNumber
-      });
-      
-      result = {
-        rowNumber: sheetLead.rowNumber,
-        leadId: existingLead.id,
-        status: 'updated',
-        reason: 'Lead updated successfully'
+    // Create new lead
+    const newLead = await createLead(aid, {
+      ...leadData,
+      sheetRowNumber: sheetLead.rowNumber,
+      timestamp: new Date() // Override with current timestamp
+    });
+
+    // console.log("line 43",newLead);    
+
+    // Call third-party API
+    let processStatus = 'failed';
+    let errorMessage = null;
+    try {
+      const payload = {
+        cust_name: newLead.name,
+        cust_email: newLead.email,
+        phone_no: newLead.phone,
+        source_id: newLead.source
       };
-    } else {
-      // Create new lead
-      const newLead = await createLead({
-        ...leadData,
-        sheetRowNumber: sheetLead.rowNumber
+
+      // console.log("payload", payload);
+      // console.log("aid", aid);
+
+      // Make API call to third-party
+      const response = await axios.post(config.getLeadCreate, payload, {
+        headers: {
+          "ENQ-BOOKS-KEY": aid,
+          "Content-Type": "application/json",
+        },
       });
-      
-      result = {
-        rowNumber: sheetLead.rowNumber,
-        leadId: newLead.id,
-        status: 'created',
-        reason: 'New lead created'
-      };
+
+      console.log("line 67",response.data);
+
+      // Update record status based on response
+      if (response.data?.status === "success") {
+        processStatus = 'success';
+        console.log(`Successfully processed lead ${newLead.id}`);
+      } else {
+        console.log(`Third-party API returned failure for lead ${newLead.id}`);
+      }
+    } catch (apiError) {
+      console.error(`Error processing lead ${newLead.id}:`, apiError.message);
+      errorMessage = apiError?.response?.data?.message || apiError.message;
+      // Keep process_status as 'failed'
     }
+
+    // Update lead with process_status and error message
+    await updateLead(aid, newLead.id, {
+      process_status: processStatus,
+      message: errorMessage
+    });
+
+    result = {
+      rowNumber: sheetLead.rowNumber,
+      leadId: newLead.id,
+      status: 'created',
+      reason: 'New lead created',
+      process_status: processStatus
+    };
 
     return result;
 
@@ -80,12 +107,33 @@ async function processLead(sheetLead, forceUpdate = false) {
   }
 }
 
+async function checkLeadRowExists(aid, email, rowNumber) {
+  const sql = `
+    SELECT id FROM kbcd_gst_all_leads
+    WHERE aid = ? AND email = ? AND sheet_row_number = ?
+  `;
+  const rows = await query(sql, [aid, email.toLowerCase(), rowNumber]);
+  return rows.length > 0 ? rows[0] : null;
+}
+
 export async function syncLeads(req, res) {
   let syncHistoryId;
-  
+
   try {
-    const { spreadsheetId, range, forceUpdate = false } = req.body;
-    
+    const aid = req.headers["enq-books-key"];
+    const { spreadsheetId, range } = req.body;
+
+    // If range is the default "Sheet1!A:Z", don't pass it so the service can auto-detect the sheet name
+    const shouldAutoDetectRange = !range || range === 'Sheet1!A:Z';
+    const finalRange = shouldAutoDetectRange ? null : range;
+
+    if (!aid) {
+      return res.status(400).json({
+        success: false,
+        error: 'Aid header is required'
+      });
+    }
+
     if (!spreadsheetId) {
       return res.status(400).json({
         success: false,
@@ -93,11 +141,20 @@ export async function syncLeads(req, res) {
       });
     }
 
-    console.log(`Starting manual sync for sheet: ${spreadsheetId}`);
+    // Check if field mapping exists for this sheet
+    const fieldMapping = await getFieldMapping(aid, spreadsheetId);
+    if (!fieldMapping) {
+      return res.status(400).json({
+        success: false,
+        error: 'Field mapping not found. Please configure field mappings before syncing.'
+      });
+    }
+
+    console.log(`Starting manual sync for sheet: ${spreadsheetId}, aid: ${aid}`);
 
     // Fetch leads from Google Sheets
-    const leadsFromSheet = await getAllLeadsFromSheet(spreadsheetId, range);
-    
+    const leadsFromSheet = await getAllLeadsFromSheet(spreadsheetId, finalRange);
+
     if (leadsFromSheet.length === 0) {
       return res.json({
         success: true,
@@ -125,9 +182,9 @@ export async function syncLeads(req, res) {
     // Process each lead
     for (const [index, sheetLead] of leadsFromSheet.entries()) {
       try {
-        const result = await processLead(sheetLead, forceUpdate);
+        const result = await processLead(aid, sheetLead, fieldMapping);
         syncResults.details.push(result);
-        
+
         if (result.status === 'created') syncResults.created++;
         else if (result.status === 'updated') syncResults.updated++;
         else if (result.status === 'skipped') syncResults.skipped++;
@@ -150,11 +207,11 @@ export async function syncLeads(req, res) {
     }
 
     // Determine overall sync status
-    const overallStatus = syncResults.errors === 0 ? 'success' : 
+    const overallStatus = syncResults.errors === 0 ? 'success' :
                          syncResults.created + syncResults.updated > 0 ? 'partial' : 'error';
 
     // Record sync history
-    syncHistoryId = await createSyncHistory({
+    syncHistoryId = await createSyncHistory(aid, {
       spreadsheetId,
       totalRecords: leadsFromSheet.length,
       createdCount: syncResults.created,
@@ -177,12 +234,12 @@ export async function syncLeads(req, res) {
       details: syncResults.details
     };
 
-    console.log('Sync completed:', response.stats);
+    // console.log('Sync completed:', response.stats);
     res.json(response);
 
   } catch (error) {
     console.error('Sync error:', error);
-    
+
     res.status(500).json({
       success: false,
       error: error.message
@@ -218,11 +275,20 @@ export async function verifySheetConnection(req, res) {
 
 export async function getSyncHistory(req, res) {
   try {
+    const aid = req.headers["enq-books-key"];
+
+    if (!aid) {
+      return res.status(400).json({
+        success: false,
+        error: 'Aid header is required'
+      });
+    }
+
     const { limit = 50 } = req.query;
-    
-    const recentLeads = await getRecentSyncedLeads(limit);
-    const syncHistory = await getRecentSyncHistory(10);
-    
+
+    const recentLeads = await getRecentSyncedLeads(aid, limit);
+    const syncHistory = await getRecentSyncHistory(aid, 10);
+
     res.json({
       success: true,
       data: {
@@ -241,16 +307,25 @@ export async function getSyncHistory(req, res) {
 
 export async function getLeads(req, res) {
   try {
+    const aid = req.headers["enq-books-key"];
+
+    if (!aid) {
+      return res.status(400).json({
+        success: false,
+        error: 'Aid header is required'
+      });
+    }
+
     const { status, page = 1, limit = 50 } = req.query;
     const offset = (page - 1) * limit;
 
-    let sql = `SELECT * FROM leads`;
-    let countSql = `SELECT COUNT(*) as total FROM leads`;
-    const params = [];
+    let sql = `SELECT * FROM kbcd_gst_all_leads WHERE aid = ?`;
+    let countSql = `SELECT COUNT(*) as total FROM kbcd_gst_all_leads WHERE aid = ?`;
+    const params = [aid];
 
     if (status) {
-      sql += ` WHERE status = ?`;
-      countSql += ` WHERE status = ?`;
+      sql += ` AND status = ?`;
+      countSql += ` AND status = ?`;
       params.push(status);
     }
 
@@ -259,7 +334,7 @@ export async function getLeads(req, res) {
 
     const [leads, countResult] = await Promise.all([
       query(sql, params),
-      query(countSql, status ? [status] : [])
+      query(countSql, status ? [aid, status] : [aid])
     ]);
 
     res.json({
@@ -271,6 +346,71 @@ export async function getLeads(req, res) {
         total: countResult[0].total,
         pages: Math.ceil(countResult[0].total / limit)
       }
+    });
+
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+}
+
+export async function getAllLeads(req, res) {
+  try {
+    const aid = req.headers["enq-books-key"];
+
+    if (!aid) {
+      return res.status(400).json({
+        success: false,
+        error: 'Aid header is required'
+      });
+    }
+
+    const { process_status } = req.body;
+
+    if (!process_status || !['success', 'failed'].includes(process_status)) {
+      return res.status(400).json({
+        success: false,
+        error: 'process_status is required and must be either "success" or "failed"'
+      });
+    }
+
+    const sql = `SELECT * FROM kbcd_gst_all_leads WHERE aid = ? AND process_status = ? ORDER BY created_at DESC`;
+    const leads = await query(sql, [aid, process_status]);
+
+    res.json({
+      success: true,
+      data: leads,
+      count: leads.length
+    });
+
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+}
+
+export async function getLeadLogs(req, res) {
+  try {
+    const aid = req.headers["enq-books-key"];
+
+    if (!aid) {
+      return res.status(400).json({
+        success: false,
+        error: 'Aid header is required'
+      });
+    }
+
+    const sql = `SELECT * FROM kbcd_gst_lead_sync_history WHERE aid = ? ORDER BY created_at DESC`;
+    const logs = await query(sql, [aid]);
+
+    res.json({
+      success: true,
+      data: logs,
+      count: logs.length
     });
 
   } catch (error) {

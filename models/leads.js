@@ -1,13 +1,15 @@
 // models/leads.js
 import { query } from '../config/database.js';
 
-export async function createLead(leadData) {
+export async function createLead(aid, leadData) {
+  // console.log("line 5",leadData);
+  
   const {
     name,
     email,
     phone,
     company,
-    source = 'Google Form',
+    source = 'Google Sheet',
     message,
     notes,
     status = 'new',
@@ -16,12 +18,13 @@ export async function createLead(leadData) {
   } = leadData;
 
   const sql = `
-    INSERT INTO leads 
-    (name, email, phone, company, source, message, notes, status, timestamp, sheet_row_number) 
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO kbcd_gst_all_leads
+    (aid, name, email, phone, company, source, message, notes, status, timestamp, sheet_row_number)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `;
 
   const params = [
+    aid,
     name || null,
     email.toLowerCase(),
     phone || null,
@@ -45,30 +48,30 @@ export async function createLead(leadData) {
   }
 }
 
-export async function findLeadByEmailAndTimestamp(email, timestamp) {
+export async function findLeadByEmailAndTimestamp(aid, email, timestamp) {
   const sql = `
-    SELECT * FROM leads 
-    WHERE email = ? AND timestamp = ?
+    SELECT * FROM kbcd_gst_all_leads
+    WHERE aid = ? AND email = ? AND timestamp = ?
   `;
-  
-  const rows = await query(sql, [email.toLowerCase(), new Date(timestamp)]);
+
+  const rows = await query(sql, [aid, email.toLowerCase(), new Date(timestamp)]);
   return rows.length > 0 ? rows[0] : null;
 }
 
-export async function findLeadByEmail(email) {
-  const sql = `SELECT * FROM leads WHERE email = ?`;
-  const rows = await query(sql, [email.toLowerCase()]);
+export async function findLeadByEmail(aid, email) {
+  const sql = `SELECT * FROM kbcd_gst_all_leads WHERE aid = ? AND email = ?`;
+  const rows = await query(sql, [aid, email.toLowerCase()]);
   return rows.length > 0 ? rows[0] : null;
 }
 
-export async function updateLead(id, leadData) {
+export async function updateLead(aid, id, leadData) {
   const fields = [];
   const values = [];
 
   Object.keys(leadData).forEach(key => {
     if (leadData[key] !== undefined) {
       fields.push(`${key} = ?`);
-      
+
       if (key === 'email') {
         values.push(leadData[key].toLowerCase());
       } else {
@@ -81,34 +84,35 @@ export async function updateLead(id, leadData) {
     throw new Error('No fields to update');
   }
 
-  values.push(id);
+  values.push(aid, id);
 
   const sql = `
-    UPDATE leads 
-    SET ${fields.join(', ')}, updated_at = CURRENT_TIMESTAMP 
-    WHERE id = ?
+    UPDATE kbcd_gst_all_leads
+    SET ${fields.join(', ')}, updated_at = CURRENT_TIMESTAMP
+    WHERE aid = ? AND id = ?
   `;
 
   const result = await query(sql, values);
   return result.affectedRows > 0;
 }
 
-export async function getRecentSyncedLeads(limit = 50) {
+export async function getRecentSyncedLeads(aid, limit = 50) {
   const sql = `
     SELECT id, name, email, phone, company, source, status, sync_date, created_at
-    FROM leads 
-    ORDER BY sync_date DESC 
+    FROM kbcd_gst_all_leads
+    WHERE aid = ?
+    ORDER BY sync_date DESC
     LIMIT ?
   `;
-  
-  return await query(sql, [limit]);
+
+  return await query(sql, [aid, limit]);
 }
 
-export async function checkLeadExists(leadData) {
+export async function checkLeadExists(aid, leadData) {
   const { email, timestamp, sheetRowNumber } = leadData;
-  
-  let sql = `SELECT id FROM leads WHERE email = ?`;
-  const params = [email.toLowerCase()];
+
+  let sql = `SELECT id FROM kbcd_gst_all_leads WHERE aid = ? AND email = ?`;
+  const params = [aid, email.toLowerCase()];
 
   if (timestamp) {
     sql += ` AND timestamp = ?`;
