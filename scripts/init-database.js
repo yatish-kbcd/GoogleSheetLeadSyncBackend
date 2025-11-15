@@ -28,6 +28,7 @@ async function initDatabase() {
         aid VARCHAR(255) NOT NULL,
         sheet_id VARCHAR(255) NOT NULL,
         sheet_name VARCHAR(255),
+        emp_id VARCHAR(255),
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
         UNIQUE KEY unique_aid_sheet (aid, sheet_id)

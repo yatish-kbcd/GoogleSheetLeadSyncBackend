@@ -6,7 +6,7 @@ import { getSheetHeaders } from '../services/googleSheetsService.js';
 export async function createConnector(req, res) {
   try {
     const aid = req.headers["enq-books-key"];
-    const { sheet_id, sheet_name } = req.body;
+    const { sheet_id, sheet_name, emp_id } = req.body;
 
     if (!aid) {
       return res.status(400).json({
@@ -31,7 +31,7 @@ export async function createConnector(req, res) {
       });
     }
 
-    const connectorId = await createSheetConnector(aid, sheet_id, sheet_name);
+    const connectorId = await createSheetConnector(aid, sheet_id, sheet_name, emp_id);
 
     res.json({
       success: true,
@@ -40,6 +40,7 @@ export async function createConnector(req, res) {
         aid,
         sheet_id,
         sheet_name,
+        emp_id,
         created_at: new Date()
       }
     });
@@ -176,6 +177,7 @@ export async function getSheets(req, res) {
           id: connector.id,
           sheet_id: connector.sheet_id,
           sheet_name: connector.sheet_name ? connector.sheet_name : "NA",
+          emp_id: connector.emp_id ? connector.emp_id : "NA",
           created_at: connector.created_at,
           field_mapping_status: fieldMapping ? true : false
         };

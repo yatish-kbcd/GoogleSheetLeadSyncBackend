@@ -2,14 +2,14 @@
 import { query } from '../config/database.js';
 import { createPool } from '../config/database.js';
 
-export async function createSheetConnector(aid, sheetId, sheetName = null) {
+export async function createSheetConnector(aid, sheetId, sheetName = null, empId = null) {
   const sql = `
     INSERT INTO kbcd_gst_sheet_connector
-    (aid, sheet_id, sheet_name)
-    VALUES (?, ?, ?)
+    (aid, sheet_id, sheet_name, emp_id)
+    VALUES (?, ?, ?, ?)
   `;
 
-  const result = await query(sql, [aid, sheetId, sheetName]);
+  const result = await query(sql, [aid, sheetId, sheetName, empId]);
   return result.insertId;
 }
 

@@ -26,8 +26,8 @@ export function mapToCRMFields(sheetRow, fieldMapping = null) {
     'message': 'message',
     'comments': 'notes',
     'notes': 'notes',
-    'source': 'source',
-    // 'campaignname': 'source',
+    // 'source': 'source',
+    'campaignname': 'source',
   };
 
   const crmData = {
@@ -143,7 +143,7 @@ export async function getSheetInfo(spreadsheetId) {
 export async function getSheetHeaders(spreadsheetId) {
   try {
     const sheets = getSheetsClient();
-    console.log(`Fetching headers from sheet: ${spreadsheetId}`);
+    // console.log(`Fetching headers from sheet: ${spreadsheetId}`);
 
     // First try to get the actual sheet names
     let sheetName = null;
@@ -173,7 +173,7 @@ export async function getSheetHeaders(spreadsheetId) {
 
         if (rows && rows.length > 0) {
           const headers = rows[0].map(header => header || null).filter(header => header);
-          console.log(`Found ${headers.length} headers using range ${rangeTry}:`, headers);
+          // console.log(`Found ${headers.length} headers using range ${rangeTry}:`, headers);
           return headers;
         }
       } catch (rangeError) {

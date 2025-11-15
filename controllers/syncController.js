@@ -40,6 +40,8 @@ async function processLead(aid, sheetLead, fieldMapping) {
       timestamp: new Date() // Override with current timestamp
     });
 
+    // console.log("line 43",newLead);    
+
     // Call third-party API
     let processStatus = 'failed';
     let errorMessage = null;
@@ -51,8 +53,8 @@ async function processLead(aid, sheetLead, fieldMapping) {
         source_id: newLead.source
       };
 
-      console.log("payload", payload);
-      console.log("aid", aid);
+      // console.log("payload", payload);
+      // console.log("aid", aid);
 
       // Make API call to third-party
       const response = await axios.post(config.getLeadCreate, payload, {
@@ -62,7 +64,7 @@ async function processLead(aid, sheetLead, fieldMapping) {
         },
       });
 
-      console.log(response.data);
+      console.log("line 67",response.data);
 
       // Update record status based on response
       if (response.data?.status === "success") {
@@ -232,7 +234,7 @@ export async function syncLeads(req, res) {
       details: syncResults.details
     };
 
-    console.log('Sync completed:', response.stats);
+    // console.log('Sync completed:', response.stats);
     res.json(response);
 
   } catch (error) {

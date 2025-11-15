@@ -2,7 +2,7 @@
 import { query } from '../config/database.js';
 
 export async function createLead(aid, leadData) {
-  console.log("line 5",leadData);
+  // console.log("line 5",leadData);
   
   const {
     name,
