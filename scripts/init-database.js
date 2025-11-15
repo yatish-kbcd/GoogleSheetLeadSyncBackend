@@ -21,16 +21,43 @@ async function initDatabase() {
 
     console.log('Connected to MySQL database');
 
-    // Create leads table
-    const createLeadsTable = `
-      CREATE TABLE IF NOT EXISTS leads (
+    // Create kbcd_gst_sheet_connector table
+    const createSheetConnectorTable = `
+      CREATE TABLE IF NOT EXISTS kbcd_gst_sheet_connector (
         id INT AUTO_INCREMENT PRIMARY KEY,
+        aid VARCHAR(255) NOT NULL,
+        sheet_id VARCHAR(255) NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        UNIQUE KEY unique_aid_sheet (aid, sheet_id)
+      );
+    `;
+
+    // Create kbcd_gst_field_mappings table
+    const createFieldMappingsTable = `
+      CREATE TABLE IF NOT EXISTS kbcd_gst_field_mappings (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        aid VARCHAR(255) NOT NULL,
+        sheet_id VARCHAR(255) NOT NULL,
+        cust_name VARCHAR(255),
+        cust_phone_no VARCHAR(255),
+        cust_email VARCHAR(255),
+        source_name VARCHAR(255),
+        city_name VARCHAR(255),
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        UNIQUE KEY unique_aid_sheet_mapping (aid, sheet_id)
+      );
+    `;
+
+    // Create kbcd_gst_all_leads table (renamed from leads)
+    const createAllLeadsTable = `
+      CREATE TABLE IF NOT EXISTS kbcd_gst_all_leads (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        aid VARCHAR(255) NOT NULL,
         name VARCHAR(255) NOT NULL,
-        email VARCHAR(255) UNIQUE NOT NULL,
+        email VARCHAR(255) NOT NULL,
         phone VARCHAR(20),
-        tech VARCHAR(255),
-        first_round_feedback TEXT,
-        first_round_status ENUM('pending', 'passed', 'failed', 'scheduled') DEFAULT 'pending',
         company VARCHAR(255),
         source VARCHAR(255),
         message TEXT,
@@ -39,17 +66,18 @@ async function initDatabase() {
         timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         sync_date TIMESTAMP NULL,
         sheet_row_number INT NULL,
+        process_status ENUM('success', 'failed') DEFAULT NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        UNIQUE KEY unique_aid_email (aid, email)
       );
     `;
 
-    // Drop and recreate sync_history table with correct schema
-    const dropSyncHistoryTable = `DROP TABLE IF EXISTS sync_history;`;
-
-    const createSyncHistoryTable = `
-      CREATE TABLE sync_history (
+    // Create kbcd_gst_lead_sync_history table (renamed from sync_history)
+    const createLeadSyncHistoryTable = `
+      CREATE TABLE kbcd_gst_lead_sync_history (
         id INT AUTO_INCREMENT PRIMARY KEY,
+        aid VARCHAR(255) NOT NULL,
         spreadsheet_id VARCHAR(255) NOT NULL,
         total_records INT DEFAULT 0,
         created_count INT DEFAULT 0,
@@ -65,14 +93,17 @@ async function initDatabase() {
     `;
 
     // Execute table creation
-    await connection.execute(createLeadsTable);
-    console.log('Leads table created or already exists');
+    await connection.execute(createSheetConnectorTable);
+    console.log('Sheet connector table created or already exists');
 
-    await connection.execute(dropSyncHistoryTable);
-    console.log('Dropped existing sync_history table');
+    await connection.execute(createFieldMappingsTable);
+    console.log('Field mappings table created or already exists');
 
-    await connection.execute(createSyncHistoryTable);
-    console.log('Sync history table created with correct schema');
+    await connection.execute(createAllLeadsTable);
+    console.log('All leads table created or already exists');
+
+    await connection.execute(createLeadSyncHistoryTable);
+    console.log('Lead sync history table created with correct schema');
 
     // Close connection
     await connection.end();
