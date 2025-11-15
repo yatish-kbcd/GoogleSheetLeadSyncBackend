@@ -1,12 +1,12 @@
 // controllers/sheetController.js
-import { getSheetConnectorsByAid, createSheetConnector, getSheetConnector } from '../models/sheetConnector.js';
+import { getSheetConnectorsByAid, createSheetConnector, getSheetConnector, deleteSheetConnectorWithMappings } from '../models/sheetConnector.js';
 import { getFieldMapping, createOrUpdateFieldMapping } from '../models/fieldMappings.js';
 import { getSheetHeaders } from '../services/googleSheetsService.js';
 
 export async function createConnector(req, res) {
   try {
     const aid = req.headers["enq-books-key"];
-    const { sheet_id } = req.body;
+    const { sheet_id, sheet_name } = req.body;
 
     if (!aid) {
       return res.status(400).json({
@@ -31,7 +31,7 @@ export async function createConnector(req, res) {
       });
     }
 
-    const connectorId = await createSheetConnector(aid, sheet_id);
+    const connectorId = await createSheetConnector(aid, sheet_id, sheet_name);
 
     res.json({
       success: true,
@@ -39,12 +39,68 @@ export async function createConnector(req, res) {
         id: connectorId,
         aid,
         sheet_id,
+        sheet_name,
         created_at: new Date()
       }
     });
 
   } catch (error) {
     console.error('Create connector error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+}
+
+export async function deleteConnector(req, res) {
+  try {
+    const aid = req.headers["enq-books-key"];
+    const { sheet_id } = req.body;
+
+    if (!aid) {
+      return res.status(400).json({
+        success: false,
+        error: 'Aid header is required'
+      });
+    }
+
+    if (!sheet_id) {
+      return res.status(400).json({
+        success: false,
+        error: 'sheet_id is required in request body'
+      });
+    }
+
+    // Check if connector exists for this sheet
+    const connector = await getSheetConnector(aid, sheet_id);
+    if (!connector) {
+      return res.status(404).json({
+        success: false,
+        error: 'Sheet connector not found'
+      });
+    }
+
+    const deleted = await deleteSheetConnectorWithMappings(aid, sheet_id);
+
+    if (deleted) {
+      res.json({
+        success: true,
+        message: 'Sheet connector and related field mappings deleted successfully',
+        data: {
+          aid,
+          sheet_id
+        }
+      });
+    } else {
+      res.status(500).json({
+        success: false,
+        error: 'Failed to delete connector'
+      });
+    }
+
+  } catch (error) {
+    console.error('Delete connector error:', error);
     res.status(500).json({
       success: false,
       error: error.message
@@ -119,6 +175,7 @@ export async function getSheets(req, res) {
         return {
           id: connector.id,
           sheet_id: connector.sheet_id,
+          sheet_name: connector.sheet_name ? connector.sheet_name : "NA",
           created_at: connector.created_at,
           field_mapping_status: fieldMapping ? true : false
         };

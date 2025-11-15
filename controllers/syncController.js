@@ -353,3 +353,68 @@ export async function getLeads(req, res) {
     });
   }
 }
+
+export async function getAllLeads(req, res) {
+  try {
+    const aid = req.headers["enq-books-key"];
+
+    if (!aid) {
+      return res.status(400).json({
+        success: false,
+        error: 'Aid header is required'
+      });
+    }
+
+    const { process_status } = req.body;
+
+    if (!process_status || !['success', 'failed'].includes(process_status)) {
+      return res.status(400).json({
+        success: false,
+        error: 'process_status is required and must be either "success" or "failed"'
+      });
+    }
+
+    const sql = `SELECT * FROM kbcd_gst_all_leads WHERE aid = ? AND process_status = ? ORDER BY created_at DESC`;
+    const leads = await query(sql, [aid, process_status]);
+
+    res.json({
+      success: true,
+      data: leads,
+      count: leads.length
+    });
+
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+}
+
+export async function getLeadLogs(req, res) {
+  try {
+    const aid = req.headers["enq-books-key"];
+
+    if (!aid) {
+      return res.status(400).json({
+        success: false,
+        error: 'Aid header is required'
+      });
+    }
+
+    const sql = `SELECT * FROM kbcd_gst_lead_sync_history WHERE aid = ? ORDER BY created_at DESC`;
+    const logs = await query(sql, [aid]);
+
+    res.json({
+      success: true,
+      data: logs,
+      count: logs.length
+    });
+
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+}

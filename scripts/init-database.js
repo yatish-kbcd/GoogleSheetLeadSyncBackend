@@ -27,10 +27,17 @@ async function initDatabase() {
         id INT AUTO_INCREMENT PRIMARY KEY,
         aid VARCHAR(255) NOT NULL,
         sheet_id VARCHAR(255) NOT NULL,
+        sheet_name VARCHAR(255),
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
         UNIQUE KEY unique_aid_sheet (aid, sheet_id)
       );
+    `;
+
+    // Add sheet_name column if it doesn't exist (for existing tables)
+    const addSheetNameColumn = `
+      ALTER TABLE kbcd_gst_sheet_connector
+      ADD COLUMN IF NOT EXISTS sheet_name VARCHAR(255);
     `;
 
     // Create kbcd_gst_field_mappings table
@@ -75,7 +82,7 @@ async function initDatabase() {
 
     // Create kbcd_gst_lead_sync_history table (renamed from sync_history)
     const createLeadSyncHistoryTable = `
-      CREATE TABLE kbcd_gst_lead_sync_history (
+      CREATE TABLE IF NOT EXISTS kbcd_gst_lead_sync_history (
         id INT AUTO_INCREMENT PRIMARY KEY,
         aid VARCHAR(255) NOT NULL,
         spreadsheet_id VARCHAR(255) NOT NULL,
