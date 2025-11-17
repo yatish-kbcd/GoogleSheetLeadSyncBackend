@@ -437,7 +437,7 @@ export async function getLeadLogs(req, res) {
       });
     }
 
-    const sql = `SELECT * FROM kbcd_gst_lead_sync_history WHERE aid = ? ORDER BY created_at DESC`;
+    const sql = `SELECT * FROM kbcd_gst_lead_sync_history WHERE aid = ? AND created_count > 0 ORDER BY created_at DESC`;
     const logs = await query(sql, [aid]);
 
     res.json({
