@@ -1,20 +1,33 @@
 // controllers/syncController.js
-import { getAllLeadsFromSheet, getSheetInfo, mapToCRMFields } from '../services/googleSheetsService.js';
-import { createLead, findLeadByEmailAndTimestamp, findLeadByEmail, updateLead, getRecentSyncedLeads } from '../models/leads.js';
-import { createSyncHistory, getRecentSyncHistory } from '../models/syncHistory.js';
-import { getFieldMapping } from '../models/fieldMappings.js';
-import { query } from '../config/database.js';
-import axios from 'axios';
-import config from '../config/config.js';
+import {
+  getAllLeadsFromSheet,
+  getSheetInfo,
+  mapToCRMFields,
+} from "../services/googleSheetsService.js";
+import {
+  createLead,
+  findLeadByEmailAndTimestamp,
+  findLeadByEmail,
+  updateLead,
+  getRecentSyncedLeads,
+} from "../models/leads.js";
+import {
+  createSyncHistory,
+  getRecentSyncHistory,
+} from "../models/syncHistory.js";
+import { getFieldMapping } from "../models/fieldMappings.js";
+import { query } from "../config/database.js";
+import axios from "axios";
+import config from "../config/config.js";
 
-async function processLead(aid, sheetLead, fieldMapping) {
+async function processLead(aid, sheetLead, fieldMapping, spreadsheetId) {
   const leadData = mapToCRMFields(sheetLead, fieldMapping);
 
   if (!leadData.email) {
     return {
       rowNumber: sheetLead.rowNumber,
-      status: 'skipped',
-      reason: 'No email address provided'
+      status: "skipped",
+      reason: "No email address provided",
     };
   }
 
@@ -23,13 +36,17 @@ async function processLead(aid, sheetLead, fieldMapping) {
     let existingLead = null;
 
     // Check if this row has already been synced by checking email and row number
-    const leadExists = await checkLeadRowExists(aid, leadData.email, sheetLead.rowNumber);
+    const leadExists = await checkLeadRowExists(
+      aid,
+      leadData.email,
+      sheetLead.rowNumber
+    );
     if (leadExists) {
       return {
         rowNumber: sheetLead.rowNumber,
         leadId: leadExists.id,
-        status: 'skipped',
-        reason: 'Row already processed'
+        status: "skipped",
+        reason: "Row already processed",
       };
     }
 
@@ -37,23 +54,26 @@ async function processLead(aid, sheetLead, fieldMapping) {
     const newLead = await createLead(aid, {
       ...leadData,
       sheetRowNumber: sheetLead.rowNumber,
-      timestamp: new Date() // Override with current timestamp
+      timestamp: new Date(), // Override with current timestamp
     });
 
-    // console.log("line 43",newLead);    
+    // console.log("line 43",newLead);
 
     // Call third-party API
-    let processStatus = 'failed';
+    let processStatus = "failed";
     let errorMessage = null;
     try {
       const payload = {
-        cust_name: newLead.name,
-        cust_email: newLead.email,
-        phone_no: newLead.phone,
-        source_id: newLead.source
+        para: {
+          cust_name: newLead.name,
+          cust_email: newLead.email,
+          phone_no: newLead.phone,
+          source_id: newLead.source ? newLead.source : 'Google Sheet',
+          google_sheet_id: spreadsheetId,
+        },
       };
 
-      // console.log("payload", payload);
+      console.log("payload line 57", payload);
       // console.log("aid", aid);
 
       // Make API call to third-party
@@ -64,11 +84,11 @@ async function processLead(aid, sheetLead, fieldMapping) {
         },
       });
 
-      console.log("line 67",response.data);
+      console.log("line 67", response.data);
 
       // Update record status based on response
       if (response.data?.status === "success") {
-        processStatus = 'success';
+        processStatus = "success";
         console.log(`Successfully processed lead ${newLead.id}`);
       } else {
         console.log(`Third-party API returned failure for lead ${newLead.id}`);
@@ -82,25 +102,24 @@ async function processLead(aid, sheetLead, fieldMapping) {
     // Update lead with process_status and error message
     await updateLead(aid, newLead.id, {
       process_status: processStatus,
-      message: errorMessage
+      message: errorMessage,
     });
 
     result = {
       rowNumber: sheetLead.rowNumber,
       leadId: newLead.id,
-      status: 'created',
-      reason: 'New lead created',
-      process_status: processStatus
+      status: "created",
+      reason: "New lead created",
+      process_status: processStatus,
     };
 
     return result;
-
   } catch (error) {
-    if (error.message === 'DUPLICATE_LEAD') {
+    if (error.message === "DUPLICATE_LEAD") {
       return {
         rowNumber: sheetLead.rowNumber,
-        status: 'skipped',
-        reason: 'Duplicate lead (already exists in system)'
+        status: "skipped",
+        reason: "Duplicate lead (already exists in system)",
       };
     }
     throw error;
@@ -124,20 +143,20 @@ export async function syncLeads(req, res) {
     const { spreadsheetId, range } = req.body;
 
     // If range is the default "Sheet1!A:Z", don't pass it so the service can auto-detect the sheet name
-    const shouldAutoDetectRange = !range || range === 'Sheet1!A:Z';
+    const shouldAutoDetectRange = !range || range === "Sheet1!A:Z";
     const finalRange = shouldAutoDetectRange ? null : range;
 
     if (!aid) {
       return res.status(400).json({
         success: false,
-        error: 'Aid header is required'
+        error: "Aid header is required",
       });
     }
 
     if (!spreadsheetId) {
       return res.status(400).json({
         success: false,
-        error: 'spreadsheetId is required'
+        error: "spreadsheetId is required",
       });
     }
 
@@ -146,26 +165,32 @@ export async function syncLeads(req, res) {
     if (!fieldMapping) {
       return res.status(400).json({
         success: false,
-        error: 'Field mapping not found. Please configure field mappings before syncing.'
+        error:
+          "Field mapping not found. Please configure field mappings before syncing.",
       });
     }
 
-    console.log(`Starting manual sync for sheet: ${spreadsheetId}, aid: ${aid}`);
+    console.log(
+      `Starting manual sync for sheet: ${spreadsheetId}, aid: ${aid}`
+    );
 
     // Fetch leads from Google Sheets
-    const leadsFromSheet = await getAllLeadsFromSheet(spreadsheetId, finalRange);
+    const leadsFromSheet = await getAllLeadsFromSheet(
+      spreadsheetId,
+      finalRange
+    );
 
     if (leadsFromSheet.length === 0) {
       return res.json({
         success: true,
-        message: 'No leads found in sheet to sync',
+        message: "No leads found in sheet to sync",
         stats: {
           total: 0,
           created: 0,
           updated: 0,
           skipped: 0,
-          errors: 0
-        }
+          errors: 0,
+        },
       });
     }
 
@@ -176,39 +201,50 @@ export async function syncLeads(req, res) {
       updated: 0,
       skipped: 0,
       errors: 0,
-      details: []
+      details: [],
     };
 
     // Process each lead
     for (const [index, sheetLead] of leadsFromSheet.entries()) {
       try {
-        const result = await processLead(aid, sheetLead, fieldMapping);
+        const result = await processLead(
+          aid,
+          sheetLead,
+          fieldMapping,
+          spreadsheetId
+        );
         syncResults.details.push(result);
 
-        if (result.status === 'created') syncResults.created++;
-        else if (result.status === 'updated') syncResults.updated++;
-        else if (result.status === 'skipped') syncResults.skipped++;
-        else if (result.status === 'error') syncResults.errors++;
+        if (result.status === "created") syncResults.created++;
+        else if (result.status === "updated") syncResults.updated++;
+        else if (result.status === "skipped") syncResults.skipped++;
+        else if (result.status === "error") syncResults.errors++;
 
         // Small delay to avoid overwhelming the database
         if (index % 10 === 0) {
-          await new Promise(resolve => setTimeout(resolve, 50));
+          await new Promise((resolve) => setTimeout(resolve, 50));
         }
-
       } catch (error) {
-        console.error(`Error processing lead at row ${sheetLead.rowNumber}:`, error);
+        console.error(
+          `Error processing lead at row ${sheetLead.rowNumber}:`,
+          error
+        );
         syncResults.errors++;
         syncResults.details.push({
           rowNumber: sheetLead.rowNumber,
-          status: 'error',
-          error: error.message
+          status: "error",
+          error: error.message,
         });
       }
     }
 
     // Determine overall sync status
-    const overallStatus = syncResults.errors === 0 ? 'success' :
-                         syncResults.created + syncResults.updated > 0 ? 'partial' : 'error';
+    const overallStatus =
+      syncResults.errors === 0
+        ? "success"
+        : syncResults.created + syncResults.updated > 0
+        ? "partial"
+        : "error";
 
     // Record sync history
     syncHistoryId = await createSyncHistory(aid, {
@@ -218,9 +254,10 @@ export async function syncLeads(req, res) {
       updatedCount: syncResults.updated,
       skippedCount: syncResults.skipped,
       errorCount: syncResults.errors,
-      syncType: 'manual',
+      syncType: "manual",
       status: overallStatus,
-      errorMessage: overallStatus === 'error' ? 'Sync completed with errors' : null
+      errorMessage:
+        overallStatus === "error" ? "Sync completed with errors" : null,
     });
 
     const response = {
@@ -229,20 +266,19 @@ export async function syncLeads(req, res) {
       syncId: syncHistoryId,
       stats: {
         total: leadsFromSheet.length,
-        ...syncResults
+        ...syncResults,
       },
-      details: syncResults.details
+      details: syncResults.details,
     };
 
     // console.log('Sync completed:', response.stats);
     res.json(response);
-
   } catch (error) {
-    console.error('Sync error:', error);
+    console.error("Sync error:", error);
 
     res.status(500).json({
       success: false,
-      error: error.message
+      error: error.message,
     });
   }
 }
@@ -250,25 +286,24 @@ export async function syncLeads(req, res) {
 export async function verifySheetConnection(req, res) {
   try {
     const { spreadsheetId } = req.body;
-    
+
     if (!spreadsheetId) {
       return res.status(400).json({
         success: false,
-        error: 'spreadsheetId is required'
+        error: "spreadsheetId is required",
       });
     }
 
     const sheetInfo = await getSheetInfo(spreadsheetId);
-    
+
     res.json({
       success: true,
-      data: sheetInfo
+      data: sheetInfo,
     });
-
   } catch (error) {
     res.status(500).json({
       success: false,
-      error: `Failed to connect to sheet: ${error.message}`
+      error: `Failed to connect to sheet: ${error.message}`,
     });
   }
 }
@@ -280,7 +315,7 @@ export async function getSyncHistory(req, res) {
     if (!aid) {
       return res.status(400).json({
         success: false,
-        error: 'Aid header is required'
+        error: "Aid header is required",
       });
     }
 
@@ -293,14 +328,13 @@ export async function getSyncHistory(req, res) {
       success: true,
       data: {
         recentLeads,
-        syncHistory
-      }
+        syncHistory,
+      },
     });
-
   } catch (error) {
     res.status(500).json({
       success: false,
-      error: error.message
+      error: error.message,
     });
   }
 }
@@ -312,7 +346,7 @@ export async function getLeads(req, res) {
     if (!aid) {
       return res.status(400).json({
         success: false,
-        error: 'Aid header is required'
+        error: "Aid header is required",
       });
     }
 
@@ -334,7 +368,7 @@ export async function getLeads(req, res) {
 
     const [leads, countResult] = await Promise.all([
       query(sql, params),
-      query(countSql, status ? [aid, status] : [aid])
+      query(countSql, status ? [aid, status] : [aid]),
     ]);
 
     res.json({
@@ -344,14 +378,13 @@ export async function getLeads(req, res) {
         page: parseInt(page),
         limit: parseInt(limit),
         total: countResult[0].total,
-        pages: Math.ceil(countResult[0].total / limit)
-      }
+        pages: Math.ceil(countResult[0].total / limit),
+      },
     });
-
   } catch (error) {
     res.status(500).json({
       success: false,
-      error: error.message
+      error: error.message,
     });
   }
 }
@@ -363,16 +396,17 @@ export async function getAllLeads(req, res) {
     if (!aid) {
       return res.status(400).json({
         success: false,
-        error: 'Aid header is required'
+        error: "Aid header is required",
       });
     }
 
     const { process_status } = req.body;
 
-    if (!process_status || !['success', 'failed'].includes(process_status)) {
+    if (!process_status || !["success", "failed"].includes(process_status)) {
       return res.status(400).json({
         success: false,
-        error: 'process_status is required and must be either "success" or "failed"'
+        error:
+          'process_status is required and must be either "success" or "failed"',
       });
     }
 
@@ -382,13 +416,12 @@ export async function getAllLeads(req, res) {
     res.json({
       success: true,
       data: leads,
-      count: leads.length
+      count: leads.length,
     });
-
   } catch (error) {
     res.status(500).json({
       success: false,
-      error: error.message
+      error: error.message,
     });
   }
 }
@@ -400,7 +433,7 @@ export async function getLeadLogs(req, res) {
     if (!aid) {
       return res.status(400).json({
         success: false,
-        error: 'Aid header is required'
+        error: "Aid header is required",
       });
     }
 
@@ -410,13 +443,12 @@ export async function getLeadLogs(req, res) {
     res.json({
       success: true,
       data: logs,
-      count: logs.length
+      count: logs.length,
     });
-
   } catch (error) {
     res.status(500).json({
       success: false,
-      error: error.message
+      error: error.message,
     });
   }
 }
