@@ -22,10 +22,10 @@ testConnection().then(() => {
 });
 
 // Routes
-app.use('/api/leads', leadsRouter);
+app.use('/leads-api/leads', leadsRouter);
 
 // Health check
-app.get('/api/health', async (req, res) => {
+app.get('/leads-api/health', async (req, res) => {
   try {
     const { query } = await import('./config/database.js');
     await query('SELECT 1');
@@ -60,7 +60,7 @@ app.use('*', (req, res) => {
   });
 });
 
-const PORT = process.env.PORT || 5000;
+const PORT = 3005;
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
   console.log(`📊 MySQL Database: ${process.env.DB_NAME}`);
