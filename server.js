@@ -22,10 +22,10 @@ testConnection().then(() => {
 });
 
 // Routes
-app.use('/leads-api/leads', leadsRouter);
+app.use('/api/leads', leadsRouter);
 
 // Health check
-app.get('/leads-api/health', async (req, res) => {
+app.get('/api/health', async (req, res) => {
   try {
     const { query } = await import('./config/database.js');
     await query('SELECT 1');
