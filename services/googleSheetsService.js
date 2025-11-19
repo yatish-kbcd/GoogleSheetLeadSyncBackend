@@ -12,53 +12,44 @@ function formatHeader(header) {
 }
 
 export function mapToCRMFields(sheetRow, fieldMapping = null) {
-  // Default field mappings if no custom mapping provided
-  const defaultMappings = {
-    'timestamp': 'timestamp',
-    'email_address': 'email',
-    'email': 'email',
-    'name': 'name',
-    'full_name': 'name',
-    'phone_number': 'phone',
-    'phone': 'phone',
-    'company': 'company',
-    'organization': 'company',
-    'message': 'message',
-    'comments': 'notes',
-    'notes': 'notes',
-    // 'source': 'source',
-    'campaignname': 'source',
-  };
-
+  // console.log("sheetRow",sheetRow);
+  // console.log("fieldMapping",fieldMapping);
+  
   const crmData = {
     syncDate: new Date()
   };
 
-  // If field mapping is provided, use it for custom fields
-  if (fieldMapping) {
-    const customMappings = {
-      [fieldMapping.cust_name]: 'name',
-      [fieldMapping.cust_phone_no]: 'phone',
-      [fieldMapping.cust_email]: 'email',
-      [fieldMapping.source_name]: 'source',
-      [fieldMapping.city_name]: 'company' // Using company field for city
-    };
-
-    Object.keys(sheetRow).forEach(sheetField => {
-      const crmField = customMappings[sheetField] || defaultMappings[sheetField];
-      if (crmField && sheetRow[sheetField]) {
-        crmData[crmField] = sheetRow[sheetField];
-      }
-    });
-  } else {
-    // Fall back to default mappings
-    Object.keys(sheetRow).forEach(sheetField => {
-      const crmField = defaultMappings[sheetField];
-      if (crmField && sheetRow[sheetField]) {
-        crmData[crmField] = sheetRow[sheetField];
-      }
-    });
+  if (!fieldMapping) {
+    // No mapping provided, skip
+    return crmData;
   }
+
+  // Define fixed mapping from internal field names to database column names
+  const internalFieldToDB = {
+    cust_name: 'name',
+    cust_email: 'email',
+    cust_phone_no: 'phone',
+    source_name: 'source',
+    city_name: 'city'
+  };
+
+  // Dynamically build mapping from Google Sheet columns to database fields
+  // using the saved field mappings from kbcd_gst_field_mappings
+  const columnToDB = {};
+  Object.keys(internalFieldToDB).forEach(internalField => {
+    const rawSheetColumn = fieldMapping[internalField];
+    if (rawSheetColumn) {
+      const formattedColumn = formatHeader(rawSheetColumn);
+      columnToDB[formattedColumn] = internalFieldToDB[internalField];
+    }
+  });
+
+  // Process only the columns that are mapped
+  Object.keys(columnToDB).forEach(columnName => {
+    if (sheetRow[columnName]) {
+      crmData[columnToDB[columnName]] = sheetRow[columnName];
+    }
+  });
 
   return crmData;
 }
@@ -67,51 +58,104 @@ export async function getAllLeadsFromSheet(spreadsheetId, range = null) {
   try {
     const sheets = getSheetsClient();
 
-    // If no range provided, get the actual sheet name and construct range
-    if (!range) {
-      try {
-        const sheetInfo = await getSheetInfo(spreadsheetId);
-        if (sheetInfo.sheets && sheetInfo.sheets.length > 0) {
-          const sheetName = sheetInfo.sheets[0].title;
-          range = `${sheetName}!A:Z`;
-        } else {
-          range = 'A:Z'; // Fallback to first sheet
-        }
-      } catch (infoError) {
-        console.log('Could not get sheet info, using default range');
-        range = 'A:Z';
+    // If a specific range is provided, use it as before (for backward compatibility)
+    if (range) {
+      // console.log(`Fetching data from specific range: ${spreadsheetId}, range: ${range}`);
+
+      const response = await sheets.spreadsheets.values.get({
+        spreadsheetId,
+        range,
+      });
+
+      const rows = response.data.values;
+
+      if (!rows || rows.length === 0) {
+        console.log('No data found in specified range');
+        return [];
       }
+
+      // console.log(`Found ${rows.length} rows in specified range`);
+
+      const headers = rows[0].map(header => formatHeader(header));
+      const dataRows = rows.slice(1);
+
+      const leads = dataRows.map((row, index) => {
+        const lead = { rowNumber: index + 2 };
+        headers.forEach((header, colIndex) => {
+          lead[header] = row[colIndex] || '';
+        });
+        return lead;
+      });
+
+      // console.log(`Processed ${leads.length} leads from specified range`);
+      return leads;
     }
 
-    console.log(`Fetching data from sheet: ${spreadsheetId}, range: ${range}`);
-
-    const response = await sheets.spreadsheets.values.get({
-      spreadsheetId,
-      range,
-    });
-
-    const rows = response.data.values;
-
-    if (!rows || rows.length === 0) {
-      console.log('No data found in sheet');
+    // No range provided: iterate through all sheets
+    let sheetInfos = [];
+    try {
+      const sheetInfo = await getSheetInfo(spreadsheetId);
+      if (sheetInfo.sheets && sheetInfo.sheets.length > 0) {
+        sheetInfos = sheetInfo.sheets;
+      } else {
+        console.log('No sheets found in spreadsheet');
+        return [];
+      }
+    } catch (infoError) {
+      console.log('Could not get sheet info, cannot proceed');
       return [];
     }
 
-    console.log(`Found ${rows.length} rows in sheet`);
+    const allLeads = [];
+    let totalRows = 0;
 
-    const headers = rows[0].map(header => formatHeader(header));
-    const dataRows = rows.slice(1);
+    // Iterate through all sheets
+    for (const sheetInfo of sheetInfos) {
+      const sheetName = sheetInfo.title;
+      const currentRange = `${sheetName}!A:Z`;
 
-    const leads = dataRows.map((row, index) => {
-      const lead = { rowNumber: index + 2 };
-      headers.forEach((header, colIndex) => {
-        lead[header] = row[colIndex] || '';
-      });
-      return lead;
-    });
+      // console.log(`Fetching data from sheet: ${sheetName}, range: ${currentRange}`);
 
-    console.log(`Processed ${leads.length} leads`);
-    return leads;
+      try {
+        const response = await sheets.spreadsheets.values.get({
+          spreadsheetId,
+          range: currentRange,
+        });
+
+        const rows = response.data.values;
+
+        if (!rows || rows.length === 0) {
+          console.log(`No data found in sheet ${sheetName}`);
+          continue;
+        }
+
+        // console.log(`Found ${rows.length} rows in sheet ${sheetName}`);
+        totalRows += rows.length;
+
+        const headers = rows[0].map(header => formatHeader(header));
+        const dataRows = rows.slice(1);
+
+        const sheetLeads = dataRows.map((row, index) => {
+          const lead = {
+            rowNumber: index + 2,
+            sheetName: sheetName
+          };
+          headers.forEach((header, colIndex) => {
+            lead[header] = row[colIndex] || '';
+          });
+          return lead;
+        });
+
+        allLeads.push(...sheetLeads);
+        // console.log(`Processed ${sheetLeads.length} leads from sheet ${sheetName}`);
+      } catch (rangeError) {
+        console.log(`Failed to fetch data from sheet ${sheetName}:`, rangeError.message);
+        continue;
+      }
+    }
+
+    // console.log(`Total processed ${allLeads.length} leads from ${sheetInfos.length} sheets, ${totalRows} total rows`);
+    return allLeads;
 
   } catch (error) {
     console.error('Error fetching from Google Sheets:', error);
@@ -143,26 +187,29 @@ export async function getSheetInfo(spreadsheetId) {
 export async function getSheetHeaders(spreadsheetId) {
   try {
     const sheets = getSheetsClient();
-    // console.log(`Fetching headers from sheet: ${spreadsheetId}`);
+    // console.log(`Fetching headers from spreadsheet: ${spreadsheetId}`);
 
-    // First try to get the actual sheet names
-    let sheetName = null;
+    // Get all sheet names
+    let sheetInfos = [];
     try {
       const sheetInfo = await getSheetInfo(spreadsheetId);
       if (sheetInfo.sheets && sheetInfo.sheets.length > 0) {
-        sheetName = sheetInfo.sheets[0].title; // Use the first sheet name
+        sheetInfos = sheetInfo.sheets;
       }
     } catch (infoError) {
       console.log('Could not get sheet info:', infoError.message);
+      return {}; // Return empty object if cannot get sheet info
     }
 
-    let tries = [];
-    if (sheetName) {
-      tries.push(`${sheetName}!A1:Z1`);
-    }
-    tries.push('A1:Z1'); // Default sheet try
+    const allHeaders = {};
 
-    for (const rangeTry of tries) {
+    // Iterate through all sheets
+    for (const sheetInfo of sheetInfos) {
+      const sheetName = sheetInfo.title;
+      // console.log(`Fetching headers for sheet: ${sheetName}`);
+
+      const rangeTry = `${sheetName}!A1:Z1`;
+
       try {
         const response = await sheets.spreadsheets.values.get({
           spreadsheetId,
@@ -173,16 +220,19 @@ export async function getSheetHeaders(spreadsheetId) {
 
         if (rows && rows.length > 0) {
           const headers = rows[0].map(header => header || null).filter(header => header);
-          // console.log(`Found ${headers.length} headers using range ${rangeTry}:`, headers);
-          return headers;
+          // console.log(`Found ${headers.length} headers for sheet ${sheetName}:`, headers);
+          allHeaders[sheetName] = headers;
+        } else {
+          console.log(`No data found in sheet ${sheetName}`);
+          allHeaders[sheetName] = [];
         }
       } catch (rangeError) {
-        console.log(`Range ${rangeTry} failed:`, rangeError.message);
+        console.log(`Failed to fetch headers for sheet ${sheetName}:`, rangeError.message);
+        allHeaders[sheetName] = [];
       }
     }
 
-    console.log('No data found in sheet');
-    return [];
+    return allHeaders;
 
   } catch (error) {
     console.error('Error fetching sheet headers:', error);

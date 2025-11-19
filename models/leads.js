@@ -3,12 +3,14 @@ import { query } from '../config/database.js';
 
 export async function createLead(aid, leadData) {
   // console.log("line 5",leadData);
-  
+
   const {
+    spreadsheet_id,
+    sub_sheet_name,
     name,
     email,
     phone,
-    company,
+    city,
     source = 'Google Sheet',
     message,
     notes,
@@ -19,16 +21,18 @@ export async function createLead(aid, leadData) {
 
   const sql = `
     INSERT INTO kbcd_gst_all_leads
-    (aid, name, email, phone, company, source, message, notes, status, timestamp, sheet_row_number)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    (aid, spreadsheet_id, sub_sheet_name, name, email, phone, city, source, message, notes, status, timestamp, sheet_row_number)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `;
 
   const params = [
     aid,
+    spreadsheet_id,
+    sub_sheet_name,
     name || null,
     email.toLowerCase(),
     phone || null,
-    company || null,
+    city || null,
     source,
     message || null,
     notes || null,
@@ -58,9 +62,9 @@ export async function findLeadByEmailAndTimestamp(aid, email, timestamp) {
   return rows.length > 0 ? rows[0] : null;
 }
 
-export async function findLeadByEmail(aid, email) {
-  const sql = `SELECT * FROM kbcd_gst_all_leads WHERE aid = ? AND email = ?`;
-  const rows = await query(sql, [aid, email.toLowerCase()]);
+export async function findLeadByEmail(aid, sub_sheet_name, email) {
+  const sql = `SELECT * FROM kbcd_gst_all_leads WHERE aid = ? AND sub_sheet_name = ? AND email = ?`;
+  const rows = await query(sql, [aid, sub_sheet_name, email.toLowerCase()]);
   return rows.length > 0 ? rows[0] : null;
 }
 
@@ -98,7 +102,7 @@ export async function updateLead(aid, id, leadData) {
 
 export async function getRecentSyncedLeads(aid, limit = 50) {
   const sql = `
-    SELECT id, name, email, phone, company, source, status, sync_date, created_at
+    SELECT id, name, email, phone, city, source, status, sync_date, created_at
     FROM kbcd_gst_all_leads
     WHERE aid = ?
     ORDER BY sync_date DESC
@@ -109,10 +113,10 @@ export async function getRecentSyncedLeads(aid, limit = 50) {
 }
 
 export async function checkLeadExists(aid, leadData) {
-  const { email, timestamp, sheetRowNumber } = leadData;
+  const { sub_sheet_name, email, timestamp, sheetRowNumber } = leadData;
 
-  let sql = `SELECT id FROM kbcd_gst_all_leads WHERE aid = ? AND email = ?`;
-  const params = [aid, email.toLowerCase()];
+  let sql = `SELECT id FROM kbcd_gst_all_leads WHERE aid = ? AND sub_sheet_name = ? AND email = ?`;
+  const params = [aid, sub_sheet_name, email.toLowerCase()];
 
   if (timestamp) {
     sql += ` AND timestamp = ?`;
