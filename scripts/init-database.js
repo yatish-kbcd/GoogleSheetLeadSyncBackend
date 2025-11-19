@@ -35,11 +35,8 @@ async function initDatabase() {
       );
     `;
 
-    // Add sheet_name column if it doesn't exist (for existing tables)
-    const addSheetNameColumn = `
-      ALTER TABLE kbcd_gst_sheet_connector
-      ADD COLUMN IF NOT EXISTS sheet_name VARCHAR(255);
-    `;
+    // Note: sheet_name column is already in CREATE TABLE, so this alter may not be needed
+    const addSheetNameColumn = ``;
 
     // Create kbcd_gst_field_mappings table
     const createFieldMappingsTable = `
@@ -47,6 +44,7 @@ async function initDatabase() {
         id INT AUTO_INCREMENT PRIMARY KEY,
         aid VARCHAR(255) NOT NULL,
         sheet_id VARCHAR(255) NOT NULL,
+        sub_sheet_name VARCHAR(255) NOT NULL,
         cust_name VARCHAR(255),
         cust_phone_no VARCHAR(255),
         cust_email VARCHAR(255),
@@ -54,7 +52,7 @@ async function initDatabase() {
         city_name VARCHAR(255),
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-        UNIQUE KEY unique_aid_sheet_mapping (aid, sheet_id)
+        UNIQUE KEY unique_aid_sheet_sub_mapping (aid, sheet_id, sub_sheet_name)
       );
     `;
 
@@ -63,10 +61,12 @@ async function initDatabase() {
       CREATE TABLE IF NOT EXISTS kbcd_gst_all_leads (
         id INT AUTO_INCREMENT PRIMARY KEY,
         aid VARCHAR(255) NOT NULL,
+        spreadsheet_id VARCHAR(255) NOT NULL,
+        sub_sheet_name VARCHAR(255) NOT NULL,
         name VARCHAR(255) NOT NULL,
         email VARCHAR(255) NOT NULL,
         phone VARCHAR(20),
-        company VARCHAR(255),
+        city VARCHAR(255),
         source VARCHAR(255),
         message TEXT,
         notes TEXT,
@@ -77,7 +77,7 @@ async function initDatabase() {
         process_status ENUM('success', 'failed') DEFAULT NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-        UNIQUE KEY unique_aid_email (aid, email)
+        UNIQUE KEY unique_aid_email (aid, sub_sheet_name, email)
       );
     `;
 
@@ -87,11 +87,13 @@ async function initDatabase() {
         id INT AUTO_INCREMENT PRIMARY KEY,
         aid VARCHAR(255) NOT NULL,
         spreadsheet_id VARCHAR(255) NOT NULL,
+        sub_sheet_name VARCHAR(255) NOT NULL,
         total_records INT DEFAULT 0,
         created_count INT DEFAULT 0,
         updated_count INT DEFAULT 0,
         skipped_count INT DEFAULT 0,
         error_count INT DEFAULT 0,
+        failed_count INT DEFAULT 0,
         sync_type VARCHAR(50) DEFAULT 'manual',
         status VARCHAR(50) DEFAULT 'success',
         error_message TEXT,
@@ -100,18 +102,89 @@ async function initDatabase() {
       );
     `;
 
+    // Create kbcd_gst_failed_leads table
+    const createFailedLeadsTable = `
+      CREATE TABLE IF NOT EXISTS kbcd_gst_failed_leads (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        aid VARCHAR(255) NOT NULL,
+        spreadsheet_id VARCHAR(255) NOT NULL,
+        sub_sheet_name VARCHAR(255) NOT NULL,
+        name VARCHAR(255),
+        email VARCHAR(255),
+        phone VARCHAR(20),
+        city VARCHAR(255),
+        source VARCHAR(255),
+        timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        sheet_row_number INT NULL,
+        reason VARCHAR(255) NOT NULL,
+        data JSON,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        INDEX idx_aid_sub_sheet (aid, sub_sheet_name)
+      );
+    `;
+
     // Execute table creation
     await connection.execute(createSheetConnectorTable);
     console.log('Sheet connector table created or already exists');
 
+    if (addSheetNameColumn.trim()) {
+      await connection.execute(addSheetNameColumn);
+      console.log('Added sheet_name column to sheet connector table if not exists');
+    } else {
+      console.log('Skipping add sheet_name column');
+    }
+
     await connection.execute(createFieldMappingsTable);
     console.log('Field mappings table created or already exists');
+
+    // Try to alter the table for existing databases
+    try {
+      await connection.execute(`
+        ALTER TABLE kbcd_gst_field_mappings ADD COLUMN sub_sheet_name VARCHAR(255) NOT NULL DEFAULT '' AFTER sheet_id
+      `);
+      console.log('Added sub_sheet_name column');
+    } catch (error) {
+      if (error.code !== 'ER_DUP_FIELDNAME') {
+        console.warn('Add column warning:', error.message);
+      } else {
+        console.log('sub_sheet_name column already exists');
+      }
+    }
+
+    try {
+      await connection.execute(`
+        ALTER TABLE kbcd_gst_field_mappings ADD UNIQUE KEY unique_aid_sheet_sub_mapping (aid, sheet_id, sub_sheet_name)
+      `);
+      console.log('Added new unique key');
+    } catch (error) {
+      if (error.code !== 'ER_DUP_KEYNAME') {
+        console.warn('Add unique key warning:', error.message);
+      } else {
+        console.log('Unique key already exists');
+      }
+    }
 
     await connection.execute(createAllLeadsTable);
     console.log('All leads table created or already exists');
 
     await connection.execute(createLeadSyncHistoryTable);
     console.log('Lead sync history table created with correct schema');
+
+    try {
+      await connection.execute(`
+        ALTER TABLE kbcd_gst_lead_sync_history ADD COLUMN failed_count INT DEFAULT 0 AFTER error_count
+      `);
+      console.log('Added failed_count column to lead sync history table');
+    } catch (error) {
+      if (error.code !== 'ER_DUP_FIELDNAME') {
+        console.warn('Add failed_count column warning:', error.message);
+      } else {
+        console.log('failed_count column already exists');
+      }
+    }
+
+    await connection.execute(createFailedLeadsTable);
+    console.log('Failed leads table created or already exists');
 
     // Close connection
     await connection.end();

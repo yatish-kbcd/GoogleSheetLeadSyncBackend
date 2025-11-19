@@ -15,29 +15,65 @@ import {
   createSyncHistory,
   getRecentSyncHistory,
 } from "../models/syncHistory.js";
-import { getFieldMapping } from "../models/fieldMappings.js";
+import { getFieldMappings, getFieldMapping } from "../models/fieldMappings.js";
+import { createFailedLead } from "../models/failedLeads.js";
 import { query } from "../config/database.js";
 import axios from "axios";
 import config from "../config/config.js";
 
-async function processLead(aid, sheetLead, fieldMapping, spreadsheetId) {
+async function processLead(aid, sub_sheet_name, sheetLead, fieldMapping, spreadsheetId) {
+  // Use the dynamic mapping approach: mapToCRMFields already handles this
   const leadData = mapToCRMFields(sheetLead, fieldMapping);
 
   if (!leadData.email) {
+    await createFailedLead({
+      aid,
+      spreadsheet_id: spreadsheetId,
+      sub_sheet_name,
+      name: leadData.name,
+      email: leadData.email,
+      phone: leadData.phone,
+      city: leadData.city,
+      source: leadData.source,
+      sheetRowNumber: sheetLead.rowNumber,
+      reason: 'missing_email',
+      data: sheetLead
+    });
     return {
       rowNumber: sheetLead.rowNumber,
-      status: "skipped",
-      reason: "No email address provided",
+      status: "failed",
+      reason: "Missing email address",
+    };
+  }
+
+  if (!leadData.name) {
+    await createFailedLead({
+      aid,
+      spreadsheet_id: spreadsheetId,
+      sub_sheet_name,
+      name: leadData.name,
+      email: leadData.email,
+      phone: leadData.phone,
+      city: leadData.city,
+      source: leadData.source,
+      sheetRowNumber: sheetLead.rowNumber,
+      reason: 'missing_name',
+      data: sheetLead
+    });
+    return {
+      rowNumber: sheetLead.rowNumber,
+      status: "failed",
+      reason: "Missing name",
     };
   }
 
   try {
     let result;
-    let existingLead = null;
 
     // Check if this row has already been synced by checking email and row number
     const leadExists = await checkLeadRowExists(
       aid,
+      sub_sheet_name,
       leadData.email,
       sheetLead.rowNumber
     );
@@ -50,14 +86,18 @@ async function processLead(aid, sheetLead, fieldMapping, spreadsheetId) {
       };
     }
 
-    // Create new lead
+    // Create new lead using dynamic mapping data
     const newLead = await createLead(aid, {
-      ...leadData,
+      spreadsheet_id: spreadsheetId,
+      sub_sheet_name,
+      name: leadData.name || null,
+      email: leadData.email || null,
+      phone: leadData.phone || null,
+      city: leadData.city || null,
+      source: leadData.source || null,
       sheetRowNumber: sheetLead.rowNumber,
       timestamp: new Date(), // Override with current timestamp
     });
-
-    // console.log("line 43",newLead);
 
     // Call third-party API
     let processStatus = "failed";
@@ -73,9 +113,6 @@ async function processLead(aid, sheetLead, fieldMapping, spreadsheetId) {
         },
       };
 
-      console.log("payload line 57", payload);
-      // console.log("aid", aid);
-
       // Make API call to third-party
       const response = await axios.post(config.getLeadCreate, payload, {
         headers: {
@@ -84,7 +121,7 @@ async function processLead(aid, sheetLead, fieldMapping, spreadsheetId) {
         },
       });
 
-      console.log("line 67", response.data);
+      console.log("Third-party API response:", response.data);
 
       // Update record status based on response
       if (response.data?.status === "success") {
@@ -116,35 +153,42 @@ async function processLead(aid, sheetLead, fieldMapping, spreadsheetId) {
     return result;
   } catch (error) {
     if (error.message === "DUPLICATE_LEAD") {
+      await createFailedLead({
+        aid,
+        spreadsheet_id: spreadsheetId,
+        sub_sheet_name,
+        name: leadData.name,
+        email: leadData.email,
+        phone: leadData.phone,
+        city: leadData.city,
+        source: leadData.source,
+        sheetRowNumber: sheetLead.rowNumber,
+        reason: 'duplicate',
+        data: sheetLead
+      });
       return {
         rowNumber: sheetLead.rowNumber,
-        status: "skipped",
-        reason: "Duplicate lead (already exists in system)",
+        status: "failed",
+        reason: "Duplicate lead",
       };
     }
     throw error;
   }
 }
 
-async function checkLeadRowExists(aid, email, rowNumber) {
+async function checkLeadRowExists(aid, sub_sheet_name, email, rowNumber) {
   const sql = `
     SELECT id FROM kbcd_gst_all_leads
-    WHERE aid = ? AND email = ? AND sheet_row_number = ?
+    WHERE aid = ? AND sub_sheet_name = ? AND email = ? AND sheet_row_number = ?
   `;
-  const rows = await query(sql, [aid, email.toLowerCase(), rowNumber]);
+  const rows = await query(sql, [aid, sub_sheet_name, email.toLowerCase(), rowNumber]);
   return rows.length > 0 ? rows[0] : null;
 }
 
 export async function syncLeads(req, res) {
-  let syncHistoryId;
-
   try {
     const aid = req.headers["enq-books-key"];
     const { spreadsheetId, range } = req.body;
-
-    // If range is the default "Sheet1!A:Z", don't pass it so the service can auto-detect the sheet name
-    const shouldAutoDetectRange = !range || range === "Sheet1!A:Z";
-    const finalRange = shouldAutoDetectRange ? null : range;
 
     if (!aid) {
       return res.status(400).json({
@@ -160,118 +204,186 @@ export async function syncLeads(req, res) {
       });
     }
 
-    // Check if field mapping exists for this sheet
-    const fieldMapping = await getFieldMapping(aid, spreadsheetId);
-    if (!fieldMapping) {
+    // Get field mappings for this spreadsheet
+    const fieldMappings = await getFieldMappings(aid, spreadsheetId);
+    if (fieldMappings.length === 0) {
       return res.status(400).json({
         success: false,
-        error:
-          "Field mapping not found. Please configure field mappings before syncing.",
+        error: "No field mappings found for this spreadsheetId. Please configure field mappings before syncing.",
       });
     }
 
     console.log(
-      `Starting manual sync for sheet: ${spreadsheetId}, aid: ${aid}`
+      `Starting manual sync for spreadsheet: ${spreadsheetId}, aid: ${aid}, found ${fieldMappings.length} sub-sheets with mappings`
     );
 
-    // Fetch leads from Google Sheets
-    const leadsFromSheet = await getAllLeadsFromSheet(
-      spreadsheetId,
-      finalRange
-    );
-
-    if (leadsFromSheet.length === 0) {
-      return res.json({
-        success: true,
-        message: "No leads found in sheet to sync",
-        stats: {
-          total: 0,
-          created: 0,
-          updated: 0,
-          skipped: 0,
-          errors: 0,
-        },
-      });
-    }
-
-    console.log(`Processing ${leadsFromSheet.length} leads from sheet`);
-
-    const syncResults = {
+    const overallSyncResults = {
       created: 0,
       updated: 0,
       skipped: 0,
+      failed: 0,
       errors: 0,
       details: [],
+      subSheetsProcessed: [],
     };
 
-    // Process each lead
-    for (const [index, sheetLead] of leadsFromSheet.entries()) {
+    // Process each sub-sheet that has field mapping
+    for (const fieldMapping of fieldMappings) {
+      const sub_sheet_name = fieldMapping.sub_sheet_name;
+
       try {
-        const result = await processLead(
-          aid,
-          sheetLead,
-          fieldMapping,
-          spreadsheetId
-        );
-        syncResults.details.push(result);
+        // Construct range for the sub-sheet
+        const sheetRange = range
+          ? `${sub_sheet_name}!${range.split('!')[1] || 'A:Z'}`
+          : `${sub_sheet_name}!A:Z`;
 
-        if (result.status === "created") syncResults.created++;
-        else if (result.status === "updated") syncResults.updated++;
-        else if (result.status === "skipped") syncResults.skipped++;
-        else if (result.status === "error") syncResults.errors++;
+        console.log(`Processing sub-sheet: ${sub_sheet_name} with range: ${sheetRange}`);
 
-        // Small delay to avoid overwhelming the database
-        if (index % 10 === 0) {
-          await new Promise((resolve) => setTimeout(resolve, 50));
+        // Fetch leads from this specific sub-sheet
+        const leadsFromSheet = await getAllLeadsFromSheet(spreadsheetId, sheetRange);
+
+        const subSheetStats = {
+          sub_sheet_name,
+          total: leadsFromSheet.length,
+          created: 0,
+          updated: 0,
+          skipped: 0,
+          failed: 0,
+          errors: 0,
+          status: "pending",
+          details: [],
+        };
+
+        if (leadsFromSheet.length === 0) {
+          subSheetStats.status = "success";
+          overallSyncResults.subSheetsProcessed.push(subSheetStats);
+          await createSyncHistory(aid, {
+            spreadsheetId,
+            sub_sheet_name,
+            totalRecords: 0,
+            failedCount: 0,
+            syncType: "manual",
+            status: "success",
+          });
+          continue;
         }
-      } catch (error) {
-        console.error(
-          `Error processing lead at row ${sheetLead.rowNumber}:`,
-          error
-        );
-        syncResults.errors++;
-        syncResults.details.push({
-          rowNumber: sheetLead.rowNumber,
+
+        // Process each lead in this sub-sheet
+        for (const [index, sheetLead] of leadsFromSheet.entries()) {
+          try {
+            const result = await processLead(
+              aid,
+              sub_sheet_name,
+              sheetLead,
+              fieldMapping,
+              spreadsheetId
+            );
+            subSheetStats.details.push(result);
+
+            if (result.status === "created") subSheetStats.created++;
+            else if (result.status === "updated") subSheetStats.updated++;
+            else if (result.status === "skipped") subSheetStats.skipped++;
+            else if (result.status === "failed") subSheetStats.failed++;
+            else if (result.status === "error") subSheetStats.errors++;
+
+            // Accumulate overall
+            if (result.status === "created") overallSyncResults.created++;
+            else if (result.status === "updated") overallSyncResults.updated++;
+            else if (result.status === "skipped") overallSyncResults.skipped++;
+            else if (result.status === "failed") overallSyncResults.failed++;
+            else if (result.status === "error") overallSyncResults.errors++;
+
+            overallSyncResults.details.push({
+              sub_sheet_name,
+              ...result,
+            });
+
+            // Small delay to avoid overwhelming the database
+            if (index % 10 === 0) {
+              await new Promise((resolve) => setTimeout(resolve, 50));
+            }
+          } catch (error) {
+            console.error(
+              `Error processing lead at row ${sheetLead.rowNumber} in ${sub_sheet_name}:`,
+              error
+            );
+            subSheetStats.errors++;
+            overallSyncResults.errors++;
+            subSheetStats.details.push({
+              rowNumber: sheetLead.rowNumber,
+              status: "error",
+              error: error.message,
+            });
+            overallSyncResults.details.push({
+              sub_sheet_name,
+              rowNumber: sheetLead.rowNumber,
+              status: "error",
+              error: error.message,
+            });
+          }
+        }
+
+        // Determine sub-sheet sync status
+        subSheetStats.status =
+          subSheetStats.errors === 0
+            ? "success"
+            : subSheetStats.created + subSheetStats.updated > 0
+            ? "partial"
+            : "error";
+
+        overallSyncResults.subSheetsProcessed.push(subSheetStats);
+
+        // Record sub-sheet sync history
+        await createSyncHistory(aid, {
+          spreadsheetId,
+          sub_sheet_name,
+          totalRecords: subSheetStats.total,
+          createdCount: subSheetStats.created,
+          updatedCount: subSheetStats.updated,
+          skippedCount: subSheetStats.skipped,
+          errorCount: subSheetStats.errors,
+          failedCount: subSheetStats.failed,
+          syncType: "manual",
+          status: subSheetStats.status,
+          errorMessage: subSheetStats.status === "error" ? "Sync completed with errors" : null,
+        });
+
+      } catch (subSheetError) {
+        console.error(`Error processing sub-sheet ${sub_sheet_name}:`, subSheetError);
+        overallSyncResults.errors++;
+        overallSyncResults.details.push({
+          sub_sheet_name,
           status: "error",
-          error: error.message,
+          error: subSheetError.message,
+        });
+        overallSyncResults.subSheetsProcessed.push({
+          sub_sheet_name,
+          status: "error",
+          error: subSheetError.message,
         });
       }
     }
 
     // Determine overall sync status
     const overallStatus =
-      syncResults.errors === 0
+      overallSyncResults.errors === 0
         ? "success"
-        : syncResults.created + syncResults.updated > 0
+        : overallSyncResults.created + overallSyncResults.updated > 0
         ? "partial"
         : "error";
 
-    // Record sync history
-    syncHistoryId = await createSyncHistory(aid, {
-      spreadsheetId,
-      totalRecords: leadsFromSheet.length,
-      createdCount: syncResults.created,
-      updatedCount: syncResults.updated,
-      skippedCount: syncResults.skipped,
-      errorCount: syncResults.errors,
-      syncType: "manual",
-      status: overallStatus,
-      errorMessage:
-        overallStatus === "error" ? "Sync completed with errors" : null,
-    });
-
     const response = {
       success: true,
-      message: `Sync completed with status: ${overallStatus}`,
-      syncId: syncHistoryId,
+      message: `Sync completed for ${fieldMappings.length} sub-sheets with overall status: ${overallStatus}`,
       stats: {
-        total: leadsFromSheet.length,
-        ...syncResults,
+        totalSubSheets: fieldMappings.length,
+        totalRecords: overallSyncResults.details.length,
+        ...overallSyncResults,
       },
-      details: syncResults.details,
+      subSheetsProcessed: overallSyncResults.subSheetsProcessed,
+      details: overallSyncResults.details,
     };
 
-    // console.log('Sync completed:', response.stats);
     res.json(response);
   } catch (error) {
     console.error("Sync error:", error);
